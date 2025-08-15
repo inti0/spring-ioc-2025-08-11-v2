@@ -18,28 +18,29 @@
 
 ### 자바 리플렉션 (Java Reflection)
 
-자바 리플렉션은 **JVM에 이미 로드된 클래스의 정보를 분석하고 조작하는 자바의 내장 기능**입니다. `java.lang.reflect` 패키지에 포함되어 있으며, 클래스, 필드, 메서드 등의 정보를 동적으로 조회하고 조작하는 데 사용됩니다.
+자바 리플렉션은 **JVM에 이미 로드된 클래스의 정보를 분석하고 조작하는 자바의 내장 기능**이다.
+`java.lang.reflect` 패키지에 포함되어 있으며, 클래스, 필드, 메서드 등의 정보를 동적으로 조회하고 조작하는 데 사용된다.
 
-- **특징**: 이미 로드된 클래스에 대한 정보만 다룰 수 있습니다.
+- **특징**: 이미 로드된 클래스에 대한 정보만 다룰 수 있다. 즉, 런타임에만 사용 가능하다.
 - **용도**: 프레임워크나 IDE에서 내부 구조를 분석할 때 주로 사용됩니다.
 
 ---
 
 ### Reflections 라이브러리
 
-`Reflections`는 **클래스패스(Classpath)를 스캔하여 아직 JVM에 로드되지 않은 클래스들을 탐색하는 기능을 제공하는 외부 라이브러리**입니다.
+`Reflections`는 **클래스패스(Classpath)를 스캔하여 아직 JVM에 로드되지 않은 클래스들을 탐색하는 기능을 제공하는 외부 라이브러리**이다.
 
-- **특징**: 특정 패키지 아래의 모든 클래스, 특정 어노테이션이 붙은 클래스, 특정 인터페이스를 구현한 클래스 등을 찾을 수 있습니다.
-- **용도**: 프레임워크나 DI 컨테이너(스프링의 컴포넌트 스캔 등)에서 필요한 클래스들을 자동으로 찾아 등록할 때 사용됩니다.
+- **특징**: 특정 패키지 아래의 모든 클래스, 특정 어노테이션이 붙은 클래스, 특정 인터페이스를 구현한 클래스 등을 찾을 수 있다.
+- **용도**: 프레임워크나 DI 컨테이너(스프링의 컴포넌트 스캔 등)에서 필요한 클래스들을 자동으로 찾아 등록할 때 사용된다.
 
 ---
 
 ### 결론
 
-자바 리플렉션은 **하나의 클래스 내부를 들여다보는 도구**이고, `Reflections` 라이브러리는 **여러 클래스들이 모여있는 클래스패스 전체를 검색하는 도구**라고 생각하면 이해하기 쉽습니다.
+자바 리플렉션은 **하나의 클래스 내부를 들여다보는 도구**이고,
+`Reflections` 라이브러리는 **여러 클래스들이 모여있는 클래스패스 전체를 검색하는 도구**다.
 
-`Reflections` 라이브러리도 내부적으로 자바 리플렉션 API를 사용하지만, 클래스패스 스캔이라는 더 큰 목표를 달성하기 위해 파일 시스템 탐색, JAR 파일 분석 등 복잡한 로직이 추가된 확장된 도구입니다.
-
+`클래스패스` : JVM이 프로그램을 실행할 때 클래스 파일(*.class)이나 리소스 파일들을 찾는 데 사용하는 경로들의 집합
 
 ## 트러블슈팅
 
@@ -117,3 +118,109 @@ private void putInstanceInBeans(Set<Class<?>> scannedClass) {
 어노테이션 접근TestPostRepository
 어노테이션 이름Repository
 ```
+
+
+## 1차 구현 코드
+
+<details>
+  <summary>상세 코드</summary>
+
+```java
+public class ApplicationContext {
+
+    Map<String, Object> beans;
+
+    public ApplicationContext(String basePackage) {
+        beans = new HashMap<>();
+        Set<Class<?>> scannedClass = scanWithComponentAnnotation(basePackage);
+        putInstanceInBeans(scannedClass);
+        System.out.println(beans);
+    }
+
+    //TODO : 순환참조 문제 고려
+    private void putInstanceInBeans(Set<Class<?>> scannedClass) {
+        for (Class<?> clazz : scannedClass) {
+            System.out.println("클래스 접근" + clazz.getSimpleName());
+            try {
+                Field[] declaredFields = clazz.getDeclaredFields();
+                System.out.println("필드 갯수" + declaredFields.length);
+                List<Field> finalFields = new ArrayList<>();
+                for (Field field : declaredFields) {
+                    System.out.println("필드 접근, 필드명 : " + field.getName());
+                    //TODO : finalField가 4개지만 생성자 매개변수가 3개인 경우는 실패할 것
+                    if (Modifier.isFinal(field.getModifiers())) {
+                        finalFields.add(field);
+                    }
+                }
+                Class<?>[] finalFieldTypes = finalFields.stream().map(Field::getType).toArray(Class<?>[]::new);
+                System.out.println("파이널 필드 갯수" + finalFieldTypes.length);
+                Constructor<?> constructor = clazz.getDeclaredConstructor(finalFieldTypes);
+                System.out.println("생성자 접근" + constructor);
+
+                //의존성이 없다면 기본생성자로 생성 후 bean에 등록
+                if (finalFieldTypes.length == 0) {
+                    String simpleName = constructor.getDeclaringClass().getSimpleName();
+                    String beanName = str.lcfirst(simpleName);
+                    Object instance = constructor.newInstance();
+                    System.out.println("객체 생성 " + beanName);
+                    beans.putIfAbsent(beanName, instance);
+                    System.out.println("=============빈에 " + beanName + " 등록==================");
+                } else {
+                    //재귀호출
+                    putInstanceInBeans(new HashSet<>(List.of(finalFieldTypes)));
+                    String simpleName = constructor.getDeclaringClass().getSimpleName();
+                    String beanName = str.lcfirst(simpleName);
+                    Object instance = constructor.newInstance(Arrays.stream(finalFieldTypes).map(key -> beans.get(Ut.str.lcfirst(key.getSimpleName()))).toArray(Object[]::new));
+                    System.out.println("객체 생성 " + beanName);
+                    beans.putIfAbsent(beanName, instance);
+                    System.out.println("=============빈에 " + beanName + " 등록==================");
+                }
+            } catch (NoSuchMethodException | InstantiationException | InvocationTargetException |
+                     IllegalAccessException e) {
+                System.out.println("예외 발생" + e.getMessage());
+            }
+        }
+    }
+
+    private Set<Class<?>> scanWithComponentAnnotation(String basePackage) {
+        Reflections reflections = new Reflections(basePackage);
+        Set<Class<?>> scannedClass = reflections.getTypesAnnotatedWith(Component.class);
+        scannedClass.removeIf(Class::isAnnotation);
+        return scannedClass;
+    }
+
+    public void init() {
+    }
+
+    public <T> T genBean(String beanName) {
+        return beans.containsKey(beanName) ? (T) beans.get(beanName) : null;
+    }
+}
+```
+</details>
+
+![img.png](img.png) 
+
+![img_1.png](img_1.png)
+
+테스트 6개를 전부 통과했지만 다음과 같은 문제가 존재한다.
+
+1️⃣ 순환 참조 문제
+
+A클래스가 B를 컴포지션하고 컨테이너에 의해 주입받는다고 하자.
+
+그런데 B클래스도 A클래스를 컴포지션 하고 주입받는다면 현재 코드에서는 무한 재귀한다.
+
+2️⃣ 생성자에 로직이 있거나 final 필드 갯수와 생성자 파라미터의 갯수가 불일치 하는 시나리오
+
+현재 로직은 파이널 필드의 갯수와 생성자의 파라미터 갯수가 일치 하는 경우에만 성공할 수 있다.
+
+현재 로직은 클래스에서 선언된 final 필드 들을 constructor에 넣는 방식이라 문제가 발생한다.
+
+Constructor.getParameterTypes()라는 메소드가 있는 것을 확인 할 수 있었고, 이 메소드를 이용하면 해결할 수 있다.
+
+3️⃣ 빈을 중복 생성 하는 문제
+
+심각성이 큰 문제가 아니기도 하고, 빈 생성 전에 등록되있는지 확인하면 쉽게 고칠 수 있는 있다.
+
+✨ 리팩토링을 하려고 했었는데 컨테이너 구현에 대한 로직도 충분히 익혔으니 V3에서 코드를 다시 작성하는 것으로 결론지었다.
